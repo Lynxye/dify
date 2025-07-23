@@ -180,8 +180,8 @@ class DigitalBaseOAuth(OAuth):
         }
         
         # 调试日志 - 中文输出
-        logger.debug(f"数字基座认证请求头: {headers}")
-        logger.debug(f"签名生成步骤 - 原始内容: {content}, SHA256签名: {sign}, 最终签名: {open_sign}")
+        # logger.debug(f"数字基座认证请求头: {headers}")
+        # logger.debug(f"签名生成步骤 - 原始内容: {content}, SHA256签名: {sign}, 最终签名: {open_sign}")
         
         return headers
 

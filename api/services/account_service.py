@@ -110,7 +110,8 @@ class AccountService:
 
         current_tenant = db.session.query(TenantAccountJoin).filter_by(account_id=account.id, current=True).first()
         if current_tenant:
-            account.set_tenant_id(current_tenant.tenant_id)
+            # account.set_tenant_id(current_tenant.tenant_id)
+            account.current_tenant_id = current_tenant.tenant_id
         else:
             available_ta = (
                 db.session.query(TenantAccountJoin)
@@ -121,7 +122,8 @@ class AccountService:
             if not available_ta:
                 return None
 
-            account.set_tenant_id(available_ta.tenant_id)
+            # account.set_tenant_id(available_ta.tenant_id)
+            account.current_tenant_id = available_ta.tenant_id
             available_ta.current = True
             db.session.commit()
 
@@ -255,6 +257,7 @@ class AccountService:
             email=email, name=name, interface_language=interface_language, password=password
         )
 
+        # TODO login创建的账户，未来不用
         TenantService.create_owner_tenant_if_not_exist(account=account)
 
         return account
@@ -399,7 +402,7 @@ class AccountService:
         cls,
         account: Optional[Account] = None,
         email: Optional[str] = None,
-        language: Optional[str] = "en-US",
+        language: Optional[str] = "zh-Hans",
     ):
         account_email = account.email if account else email
         if account_email is None:
@@ -432,7 +435,7 @@ class AccountService:
 
     @classmethod
     def send_email_code_login_email(
-        cls, account: Optional[Account] = None, email: Optional[str] = None, language: Optional[str] = "en-US"
+        cls, account: Optional[Account] = None, email: Optional[str] = None, language: Optional[str] = "zh-Hans"
     ):
         email = account.email if account else email
         if email is None:
@@ -608,6 +611,7 @@ class TenantService:
         )
 
         if available_ta:
+            logging.info(f"找到用户{account}的空间{available_ta}")
             return
 
         """Create owner tenant if not exist"""
@@ -615,16 +619,17 @@ class TenantService:
         #     raise WorkSpaceNotAllowedCreateError()
         
         # TODO 需要补充逻辑，根据用户的机构id，寻找是否已经创建了tenant，如果有，则将用户加入该tanent，如果没有，先创建tanent，再将用户加入tanent
-        # 当前将用户全部加进一个默认tanent
+        # 当前将用户加进传入的name参数，内容为机构名称，如无，则加入"教育大模型应用空间"
         
-        name = "教育大模型应用空间"
-
         if name:
             tenant = TenantService.get_tenant_by_name(name)
             if tenant is None:
                 tenant = TenantService.create_tenant(name=name, is_setup=is_setup)
         else:
-            tenant = TenantService.create_tenant(name=f"{account.name}'s Workspace", is_setup=is_setup)
+            name = "教育大模型应用空间"
+            # tenant = TenantService.create_tenant(name=f"{account.name}'s Workspace", is_setup=is_setup)
+            tenant = TenantService.create_tenant(name=name, is_setup=is_setup)
+        logging.info(f"为用户{account}创建空间{tenant}")
         TenantService.create_tenant_member(tenant, account, role="owner")
         account.current_tenant = tenant
         db.session.commit()
@@ -699,7 +704,8 @@ class TenantService:
             ).update({"current": False})
             tenant_account_join.current = True
             # Set the current tenant for the account
-            account.set_tenant_id(tenant_account_join.tenant_id)
+            # account.set_tenant_id(tenant_account_join.tenant_id)
+            account.current_tenant_id = tenant_account_join.tenant_id
             db.session.commit()
 
     @staticmethod
@@ -909,6 +915,7 @@ class RegisterService:
         status: Optional[AccountStatus] = None,
         is_setup: Optional[bool] = False,
         create_workspace_required: Optional[bool] = True,
+        tenant_name: Optional[str] = None,
     ) -> Account:
         db.session.begin_nested()
         """Register account"""
@@ -927,10 +934,15 @@ class RegisterService:
                 AccountService.link_account_integrate(provider, open_id, account)
 
             if FeatureService.get_system_features().is_allow_create_workspace and create_workspace_required:
-                tenant = TenantService.create_tenant(f"{account.name}'s Workspace")
-                TenantService.create_tenant_member(tenant, account, role="owner")
-                account.current_tenant = tenant
-                tenant_was_created.send(tenant)
+                if not tenant_name:
+                    tenant_name = "教育大模型应用空间"
+                tenant = TenantService.get_tenant_by_name(tenant_name)
+                if not tenant:
+                    tenant = TenantService.create_tenant(name=tenant_name)
+                    TenantService.create_tenant_member(tenant, account, role="owner")
+                    logging.info(f"为用户{account}创建空间{tenant_name}")
+                    account.current_tenant = tenant
+                    tenant_was_created.send(tenant)
 
             db.session.commit()
         except WorkSpaceNotAllowedCreateError:

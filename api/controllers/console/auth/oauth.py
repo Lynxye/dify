@@ -106,6 +106,8 @@ class OAuthCallback(Resource):
             logging.exception(f"OAuth认证过程中发生错误，认证提供方: {provider}，错误信息: {error_text}")
             return {"error": "OAuth process failed"}, 400
 
+        logging.info(f"获取认证用户信息: {user_info.name}")
+        
         if invite_token and RegisterService.is_valid_invite_token(invite_token):
             invitation = RegisterService._get_invitation_by_token(token=invite_token)
             if invitation:
@@ -115,8 +117,13 @@ class OAuthCallback(Resource):
 
             return redirect(f"{dify_config.CONSOLE_WEB_URL}/signin/invite-settings?invite_token={invite_token}")
 
+        jgmc = request.args.get("jgmc")
+        logging.info(f"机构名称: {jgmc}")
+        if not jgmc:
+            jgmc = "教育大模型应用空间"
+            
         try:
-            account = _generate_account(provider, user_info)
+            account = _generate_account(provider, user_info, tenant_name=jgmc)
         except AccountNotFoundError:
             return redirect(f"{dify_config.CONSOLE_WEB_URL}/signin?message=Account not found.")
         except (WorkSpaceNotFoundError, WorkSpaceNotAllowedCreateError):
@@ -137,7 +144,8 @@ class OAuthCallback(Resource):
             db.session.commit()
 
         try:
-            TenantService.create_owner_tenant_if_not_exist(account)
+            # TODO 暂时使用jgmc传给account_service
+            TenantService.create_owner_tenant_if_not_exist(account, name=jgmc)
         except Unauthorized:
             return redirect(f"{dify_config.CONSOLE_WEB_URL}/signin?message=Workspace not found.")
         except WorkSpaceNotAllowedCreateError:
@@ -152,6 +160,7 @@ class OAuthCallback(Resource):
         )
         
         kb = request.args.get("kb")
+        logging.info(f"是否跳转知识库: {kb}")
         if kb:
             return redirect(
             # f"{dify_config.CONSOLE_WEB_URL}?access_token={token_pair.access_token}&refresh_token={token_pair.refresh_token}"
@@ -175,7 +184,7 @@ def _get_account_by_openid_or_email(provider: str, user_info: OAuthUserInfo) -> 
     return account
 
 
-def _generate_account(provider: str, user_info: OAuthUserInfo):
+def _generate_account(provider: str, user_info: OAuthUserInfo, tenant_name=None):
     # Get account by openid or email.
     account = _get_account_by_openid_or_email(provider, user_info)
 
@@ -183,29 +192,33 @@ def _generate_account(provider: str, user_info: OAuthUserInfo):
         tenant = TenantService.get_join_tenants(account)
         if not tenant:
             # if not FeatureService.get_system_features().is_allow_create_workspace:
-            if tenant:
-                raise WorkSpaceNotAllowedCreateError()
-            else:
-                tenant = TenantService.create_tenant(f"{account.name}'s Workspace")
+            if not tenant_name:
+                tenant_name = "教育大模型应用空间"
+            tenant = TenantService.get_tenant_by_name(tenant_name)
+            if not tenant:
+                tenant = TenantService.create_tenant(name=tenant_name)
                 TenantService.create_tenant_member(tenant, account, role="owner")
+                logging.info(f"为用户{account}创建空间{tenant_name}")
                 account.current_tenant = tenant
                 tenant_was_created.send(tenant)
 
     if not account:
         # if not FeatureService.get_system_features().is_allow_register:
         #     raise AccountNotFoundError()
-        account_name = user_info.name or "Dify"
+        account_name = user_info.name or "教育用户"
         account = RegisterService.register(
-            email=user_info.email, name=account_name, password=None, open_id=user_info.id, provider=provider
+            email=user_info.email, name=account_name, password=None, open_id=user_info.id, provider=provider, tenant_name=tenant_name
         )
 
         # Set interface language
-        preferred_lang = request.accept_languages.best_match(languages)
-        if preferred_lang and preferred_lang in languages:
-            interface_language = preferred_lang
-        else:
-            interface_language = languages[0]
-        account.interface_language = interface_language
+        # preferred_lang = request.accept_languages.best_match(languages)
+        # if preferred_lang and preferred_lang in languages:
+        #     interface_language = preferred_lang
+        # else:
+        #     interface_language = languages[0]
+        # account.interface_language = interface_language
+        account.interface_language = "zh-Hans"
+        
         db.session.commit()
 
     # Link account
